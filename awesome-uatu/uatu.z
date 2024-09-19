@@ -1,0 +1,12 @@
+[Unit]
+Description=Kubernetes Pod Status Web Service
+After=network.target
+
+[Service]
+Type=simple
+User=nobody
+ExecStart=/usr/local/bin/mypodstatus
+Restart=on-failure
+
+[Install]
+WantedBy=multi-user.target
