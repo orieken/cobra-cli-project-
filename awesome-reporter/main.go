@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"flag"
 	"fmt"
+	"html/template"
 	"os"
 	"path/filepath"
 	"strings"
@@ -49,9 +50,14 @@ func main() {
 	flag.BoolVar(&verboseMode, "verbose", false, "Enable verbose output")
 	flag.Parse()
 
+	// Create an instance of DefaultOutputHandler
+	handler := DefaultOutputHandler{}
+
+	// Process files and get results
 	results := processFiles(defaultDir, prefix)
 
-	if err := outputResults(prefix, results, appFS); err != nil {
+	// Output results using the handler
+	if err := outputResults(handler, prefix, results, appFS); err != nil {
 		fmt.Fprintf(os.Stderr, "Failed to output results: %v\n", err)
 		os.Exit(1)
 	}
@@ -143,26 +149,130 @@ func aggregateStatusCounts(scenarios []Scenario, results map[string]StatusCount)
 	}
 }
 
-func outputResults(prefix string, results map[string]StatusCount, fs afero.Fs) error {
+//func outputResults(prefix string, results map[string]StatusCount, fs afero.Fs) error {
+//	outputFileName := fmt.Sprintf("%s_aggregated_results.json", prefix)
+//	resultData, err := json.MarshalIndent(results, "", "    ")
+//	if err != nil {
+//		if verboseMode {
+//			fmt.Println("Error marshalling results:", err)
+//		}
+//		return err
+//	}
+//
+//	// Use the provided filesystem to write the file
+//	err = afero.WriteFile(fs, outputFileName, resultData, 0755)
+//	if err != nil {
+//		return err
+//	}
+//
+//	fmt.Println("Scenario Name | Passed | Pending | Skipped | Failed | Error Messages")
+//	for name, count := range results {
+//		errors := strings.Join(count.Messages, "; ")
+//		fmt.Printf("%s | %d | %d | %d | %d | %s\n", name, count.Passed, count.Pending, count.Skipped, count.Failed, errors)
+//	}
+//	return nil
+//}
+
+type OutputHandler interface {
+	HandleJSONOutput(prefix string, results map[string]StatusCount, fs afero.Fs) error
+	HandleHTMLOutput(prefix string, results map[string]StatusCount, fs afero.Fs) error
+}
+
+type DefaultOutputHandler struct{}
+
+func (d DefaultOutputHandler) HandleJSONOutput(prefix string, results map[string]StatusCount, fs afero.Fs) error {
+	return handleJSONOutput(prefix, results, fs) // Assuming this is your actual function
+}
+
+func (d DefaultOutputHandler) HandleHTMLOutput(prefix string, results map[string]StatusCount, fs afero.Fs) error {
+	return handleHTMLOutput(prefix, results, fs)
+}
+
+func outputResults(handler OutputHandler, prefix string, results map[string]StatusCount, fs afero.Fs) error {
+	if err := handler.HandleJSONOutput(prefix, results, fs); err != nil {
+		fmt.Fprintf(os.Stderr, "Failed to output JSON results: %v\n", err)
+		return err
+	}
+
+	if err := handler.HandleHTMLOutput(prefix, results, fs); err != nil {
+		fmt.Fprintf(os.Stderr, "Failed to output HTML results: %v\n", err)
+		return err
+	}
+
+	handleConsoleOutput(results) // Adjust accordingly if needed
+	return nil
+}
+
+const htmlTemplate = `<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <title>Scenario Status Report</title>
+    <style>
+        body { font-family: Arial, sans-serif; margin: 20px; }
+        table { width: 100%; border-collapse: collapse; }
+        th, td { border: 1px solid #ccc; padding: 8px; text-align: left; }
+        th { background-color: #f2f2f2; }
+    </style>
+</head>
+<body>
+<h1>Scenario Status Report</h1>
+<table>
+    <thead>
+        <tr>
+            <th>Scenario Name</th>
+            <th>Passed</th>
+            <th>Pending</th>
+            <th>Failed</th>
+            <th>Skipped</th>
+            <th>Error Messages</th>
+        </tr>
+    </thead>
+    <tbody>
+        {{range $name, $counts := .}}
+        <tr>
+            <td>{{$name}}</td>
+            <td>{{$counts.Passed}}</td>
+            <td>{{$counts.Pending}}</td>
+            <td>{{$counts.Failed}}</td>
+            <td>{{$counts.Skipped}}</td>
+            <td>{{range $counts.Messages}}<div>{{.}}</div>{{end}}</td>
+        </tr>
+        {{end}}
+    </tbody>
+</table>
+</body>
+</html>`
+
+func handleJSONOutput(prefix string, results map[string]StatusCount, fs afero.Fs) error {
 	outputFileName := fmt.Sprintf("%s_aggregated_results.json", prefix)
 	resultData, err := json.MarshalIndent(results, "", "    ")
 	if err != nil {
-		if verboseMode {
-			fmt.Println("Error marshalling results:", err)
-		}
-		return err
+		return fmt.Errorf("error marshalling results: %v", err)
 	}
+	return afero.WriteFile(fs, outputFileName, resultData, 0644)
+}
 
-	// Use the provided filesystem to write the file
-	err = afero.WriteFile(fs, outputFileName, resultData, 0755)
+func handleHTMLOutput(prefix string, results map[string]StatusCount, fs afero.Fs) error {
+	t, err := template.New("report").Parse(htmlTemplate)
 	if err != nil {
-		return err
+		return fmt.Errorf("error parsing HTML template: %v", err)
 	}
 
-	fmt.Println("Scenario Name | Passed | Pending | Skipped | Failed | Error Messages")
+	htmlFileName := fmt.Sprintf("%s_report.html", prefix)
+	htmlFile, err := fs.Create(htmlFileName)
+	if err != nil {
+		return fmt.Errorf("error creating HTML file: %v", err)
+	}
+	defer htmlFile.Close()
+
+	return t.Execute(htmlFile, results)
+}
+
+func handleConsoleOutput(results map[string]StatusCount) {
+	fmt.Println("Scenario Name | Passed | Pending | Failed | Skipped | Error Messages")
 	for name, count := range results {
 		errors := strings.Join(count.Messages, "; ")
 		fmt.Printf("%s | %d | %d | %d | %d | %s\n", name, count.Passed, count.Pending, count.Skipped, count.Failed, errors)
 	}
-	return nil
 }
