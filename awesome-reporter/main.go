@@ -1,4 +1,4 @@
-package awesome_reporter
+package main
 
 import (
 	"encoding/json"
@@ -11,22 +11,30 @@ import (
 	"github.com/spf13/afero"
 )
 
-// Scenario represents the structure of each test scenario.
+type Feature struct {
+	Elements []Scenario `json:"elements"`
+}
+
+type Result struct {
+	Status       string `json:"status"`
+	ErrorMessage string `json:"error_message,omitempty"`
+}
+
 type Scenario struct {
 	Name  string `json:"name"`
 	Steps []Step `json:"steps"`
 }
 
-// Step represents the structure of each step in a scenario.
 type Step struct {
-	Status string `json:"status"`
+	Result Result `json:"result"`
 }
 
-// StatusCount holds the counts of different statuses.
 type StatusCount struct {
-	Passed  int `json:"passed"`
-	Pending int `json:"pending"`
-	Failed  int `json:"failed"`
+	Passed   int      `json:"passed"`
+	Pending  int      `json:"pending"`
+	Failed   int      `json:"failed"`
+	Skipped  int      `json:"skipped"`
+	Messages []string `json:"error_messages"`
 }
 
 var (
@@ -92,30 +100,46 @@ func readScenariosFromFile(filePath string) ([]Scenario, error) {
 		}
 		return nil, err
 	}
-	var scenarios []Scenario
-	if err := json.Unmarshal(data, &scenarios); err != nil {
+	var features []Feature
+	if err := json.Unmarshal(data, &features); err != nil {
 		if verboseMode {
 			fmt.Println("Error parsing JSON:", err)
 		}
 		return nil, err
 	}
+
+	// Extract all scenarios from the features
+	var scenarios []Scenario
+	for _, feature := range features {
+		scenarios = append(scenarios, feature.Elements...)
+	}
+
 	return scenarios, nil
 }
 
 func aggregateStatusCounts(scenarios []Scenario, results map[string]StatusCount) {
 	for _, scenario := range scenarios {
+		fmt.Printf("Processing scenario: %s\n", scenario.Name)
 		count := results[scenario.Name]
 		for _, step := range scenario.Steps {
-			switch step.Status {
+			status := strings.ToLower(strings.TrimSpace(step.Result.Status))
+			fmt.Printf("Step status: %s\n", status)
+			switch status {
 			case "passed":
 				count.Passed++
 			case "pending":
 				count.Pending++
 			case "failed":
 				count.Failed++
+				if step.Result.ErrorMessage != "" {
+					count.Messages = append(count.Messages, step.Result.ErrorMessage)
+				}
+			case "skipped":
+				count.Skipped++
 			}
 		}
 		results[scenario.Name] = count
+		fmt.Printf("Results for %s: %+v\n", scenario.Name, count)
 	}
 }
 
@@ -135,9 +159,10 @@ func outputResults(prefix string, results map[string]StatusCount, fs afero.Fs) e
 		return err
 	}
 
-	fmt.Println("Scenario Name | Passed | Pending | Failed")
+	fmt.Println("Scenario Name | Passed | Pending | Skipped | Failed | Error Messages")
 	for name, count := range results {
-		fmt.Printf("%s | %d | %d | %d\n", name, count.Passed, count.Pending, count.Failed)
+		errors := strings.Join(count.Messages, "; ")
+		fmt.Printf("%s | %d | %d | %d | %d | %s\n", name, count.Passed, count.Pending, count.Skipped, count.Failed, errors)
 	}
 	return nil
 }
