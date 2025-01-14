@@ -31,17 +31,15 @@ type Step struct {
 }
 
 type StatusCount struct {
-	Passed   int      `json:"passed"`
-	Pending  int      `json:"pending"`
-	Failed   int      `json:"failed"`
-	Skipped  int      `json:"skipped"`
+	Passed   bool     `json:"passed"`
+	Failed   bool     `json:"failed"`
 	Messages []string `json:"error_messages"`
 }
 
 var (
-	appFS       = afero.NewOsFs() // Use afero for filesystem abstraction
-	verboseMode bool              // Flag for verbose mode
-	defaultDir  = "./"            // Default directory to look for JSON files
+	appFS       = afero.NewOsFs()
+	verboseMode bool
+	defaultDir  = "./"
 )
 
 func main() {
@@ -50,13 +48,9 @@ func main() {
 	flag.BoolVar(&verboseMode, "verbose", false, "Enable verbose output")
 	flag.Parse()
 
-	// Create an instance of DefaultOutputHandler
 	handler := DefaultOutputHandler{}
 
-	// Process files and get results
 	results := processFiles(defaultDir, prefix)
-
-	// Output results using the handler
 	if err := outputResults(handler, prefix, results, appFS); err != nil {
 		fmt.Fprintf(os.Stderr, "Failed to output results: %v\n", err)
 		os.Exit(1)
@@ -114,7 +108,6 @@ func readScenariosFromFile(filePath string) ([]Scenario, error) {
 		return nil, err
 	}
 
-	// Extract all scenarios from the features
 	var scenarios []Scenario
 	for _, feature := range features {
 		scenarios = append(scenarios, feature.Elements...)
@@ -125,53 +118,23 @@ func readScenariosFromFile(filePath string) ([]Scenario, error) {
 
 func aggregateStatusCounts(scenarios []Scenario, results map[string]StatusCount) {
 	for _, scenario := range scenarios {
-		fmt.Printf("Processing scenario: %s\n", scenario.Name)
-		count := results[scenario.Name]
+		count := StatusCount{}
+		errorSet := make(map[string]bool)
 		for _, step := range scenario.Steps {
-			status := strings.ToLower(strings.TrimSpace(step.Result.Status))
-			fmt.Printf("Step status: %s\n", status)
-			switch status {
-			case "passed":
-				count.Passed++
-			case "pending":
-				count.Pending++
-			case "failed":
-				count.Failed++
-				if step.Result.ErrorMessage != "" {
+			if step.Result.Status == "failed" {
+				count.Failed = true
+				if step.Result.ErrorMessage != "" && !errorSet[step.Result.ErrorMessage] {
 					count.Messages = append(count.Messages, step.Result.ErrorMessage)
+					errorSet[step.Result.ErrorMessage] = true
 				}
-			case "skipped":
-				count.Skipped++
 			}
 		}
+		if !count.Failed {
+			count.Passed = true
+		}
 		results[scenario.Name] = count
-		fmt.Printf("Results for %s: %+v\n", scenario.Name, count)
 	}
 }
-
-//func outputResults(prefix string, results map[string]StatusCount, fs afero.Fs) error {
-//	outputFileName := fmt.Sprintf("%s_aggregated_results.json", prefix)
-//	resultData, err := json.MarshalIndent(results, "", "    ")
-//	if err != nil {
-//		if verboseMode {
-//			fmt.Println("Error marshalling results:", err)
-//		}
-//		return err
-//	}
-//
-//	// Use the provided filesystem to write the file
-//	err = afero.WriteFile(fs, outputFileName, resultData, 0755)
-//	if err != nil {
-//		return err
-//	}
-//
-//	fmt.Println("Scenario Name | Passed | Pending | Skipped | Failed | Error Messages")
-//	for name, count := range results {
-//		errors := strings.Join(count.Messages, "; ")
-//		fmt.Printf("%s | %d | %d | %d | %d | %s\n", name, count.Passed, count.Pending, count.Skipped, count.Failed, errors)
-//	}
-//	return nil
-//}
 
 type OutputHandler interface {
 	HandleJSONOutput(prefix string, results map[string]StatusCount, fs afero.Fs) error
@@ -181,7 +144,7 @@ type OutputHandler interface {
 type DefaultOutputHandler struct{}
 
 func (d DefaultOutputHandler) HandleJSONOutput(prefix string, results map[string]StatusCount, fs afero.Fs) error {
-	return handleJSONOutput(prefix, results, fs) // Assuming this is your actual function
+	return handleJSONOutput(prefix, results, fs)
 }
 
 func (d DefaultOutputHandler) HandleHTMLOutput(prefix string, results map[string]StatusCount, fs afero.Fs) error {
@@ -199,50 +162,23 @@ func outputResults(handler OutputHandler, prefix string, results map[string]Stat
 		return err
 	}
 
-	handleConsoleOutput(results) // Adjust accordingly if needed
+	handleConsoleOutput(results)
 	return nil
 }
 
-const htmlTemplate = `<!DOCTYPE html>
-<html lang="en">
-<head>
-    <meta charset="UTF-8">
-    <title>Scenario Status Report</title>
-    <style>
-        body { font-family: Arial, sans-serif; margin: 20px; }
-        table { width: 100%; border-collapse: collapse; }
-        th, td { border: 1px solid #ccc; padding: 8px; text-align: left; }
-        th { background-color: #f2f2f2; }
-    </style>
-</head>
+const htmlTemplate = `
+<html>
+<head><title>Test Report</title></head>
 <body>
-<h1>Scenario Status Report</h1>
-<table>
-    <thead>
-        <tr>
-            <th>Scenario Name</th>
-            <th>Passed</th>
-            <th>Pending</th>
-            <th>Failed</th>
-            <th>Skipped</th>
-            <th>Error Messages</th>
-        </tr>
-    </thead>
-    <tbody>
-        {{range $name, $counts := .}}
-        <tr>
-            <td>{{$name}}</td>
-            <td>{{$counts.Passed}}</td>
-            <td>{{$counts.Pending}}</td>
-            <td>{{$counts.Failed}}</td>
-            <td>{{$counts.Skipped}}</td>
-            <td>{{range $counts.Messages}}<div>{{.}}</div>{{end}}</td>
-        </tr>
-        {{end}}
-    </tbody>
-</table>
+<h1>Scenarios</h1>
+<ul>
+{{- range $name, $counts := . }}
+    <li>{{$name}} - {{if $counts.Passed}}Passed{{else}}Failed{{end}}: {{join $counts.Messages ", "}}</li>
+{{- end }}
+</ul>
 </body>
-</html>`
+</html>
+`
 
 func handleJSONOutput(prefix string, results map[string]StatusCount, fs afero.Fs) error {
 	outputFileName := fmt.Sprintf("%s_aggregated_results.json", prefix)
@@ -254,7 +190,12 @@ func handleJSONOutput(prefix string, results map[string]StatusCount, fs afero.Fs
 }
 
 func handleHTMLOutput(prefix string, results map[string]StatusCount, fs afero.Fs) error {
-	t, err := template.New("report").Parse(htmlTemplate)
+	funcMap := template.FuncMap{
+		"join": strings.Join, // Providing implementation for the join function used in the template.
+	}
+
+	htmlTemplate := `{{/* your existing template string here */}}`
+	t, err := template.New("report").Funcs(funcMap).Parse(htmlTemplate)
 	if err != nil {
 		return fmt.Errorf("error parsing HTML template: %v", err)
 	}
@@ -270,9 +211,13 @@ func handleHTMLOutput(prefix string, results map[string]StatusCount, fs afero.Fs
 }
 
 func handleConsoleOutput(results map[string]StatusCount) {
-	fmt.Println("Scenario Name | Passed | Pending | Failed | Skipped | Error Messages")
+	fmt.Println("Scenario Name | Status | Error Messages")
 	for name, count := range results {
 		errors := strings.Join(count.Messages, "; ")
-		fmt.Printf("%s | %d | %d | %d | %d | %s\n", name, count.Passed, count.Pending, count.Skipped, count.Failed, errors)
+		status := "Failed"
+		if count.Passed {
+			status = "Passed"
+		}
+		fmt.Printf("%s | %s | %s\n", name, status, errors)
 	}
 }
