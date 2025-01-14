@@ -31,8 +31,8 @@ type Step struct {
 }
 
 type StatusCount struct {
-	Passed   bool     `json:"passed"`
-	Failed   bool     `json:"failed"`
+	Passed   int      `json:"passed"`
+	Failed   int      `json:"failed"`
 	Messages []string `json:"error_messages"`
 }
 
@@ -118,22 +118,35 @@ func readScenariosFromFile(filePath string) ([]Scenario, error) {
 
 func aggregateStatusCounts(scenarios []Scenario, results map[string]StatusCount) {
 	for _, scenario := range scenarios {
-		count := StatusCount{}
-		errorSet := make(map[string]bool)
+		count, exists := results[scenario.Name]
+		if !exists {
+			count = StatusCount{
+				Messages: []string{},
+			}
+		}
+
 		for _, step := range scenario.Steps {
-			if step.Result.Status == "failed" {
-				count.Failed = true
-				if step.Result.ErrorMessage != "" && !errorSet[step.Result.ErrorMessage] {
+			switch strings.ToLower(strings.TrimSpace(step.Result.Status)) {
+			case "passed":
+				count.Passed++
+			case "failed":
+				count.Failed++
+				if step.Result.ErrorMessage != "" && !contains(count.Messages, step.Result.ErrorMessage) {
 					count.Messages = append(count.Messages, step.Result.ErrorMessage)
-					errorSet[step.Result.ErrorMessage] = true
 				}
 			}
 		}
-		if !count.Failed {
-			count.Passed = true
-		}
 		results[scenario.Name] = count
 	}
+}
+
+func contains(slice []string, item string) bool {
+	for _, s := range slice {
+		if s == item {
+			return true
+		}
+	}
+	return false
 }
 
 type OutputHandler interface {
@@ -177,21 +190,16 @@ const htmlTemplate = `
         table { width: 100%; border-collapse: collapse; }
         th, td { border: 1px solid #ccc; padding: 8px; text-align: left; }
         th { background-color: #f2f2f2; }
-        details { background-color: #f9f9f9; border-left: 2px solid #e0e0e0; margin: 4px 0; padding: 4px; }
-        summary { font-weight: bold; cursor: pointer; }
-        summary::-webkit-details-marker { display: none; }
     </style>
 </head>
 <body>
 <h1>Scenario Status Report</h1>
-<p>Scenarios Total: {{len .}}</p>
-<p>Passed: {{countPassed .}}</p>
-<p>Failed: {{countFailed .}}</p>
 <table>
     <thead>
         <tr>
             <th>Scenario Name</th>
-            <th>Status</th>
+            <th>Passed</th>
+            <th>Failed</th>
             <th>Error Messages</th>
         </tr>
     </thead>
@@ -199,15 +207,9 @@ const htmlTemplate = `
         {{range $name, $counts := .}}
         <tr>
             <td>{{$name}}</td>
-            <td>{{if $counts.Passed}}Passed{{else}}Failed{{end}}</td>
-            <td>
-                {{range $counts.Messages}}
-                <details>
-                    <summary>Error Details</summary>
-                    <p>{{.}}</p>
-                </details>
-                {{end}}
-            </td>
+            <td>{{$counts.Passed}}</td>
+            <td>{{$counts.Failed}}</td>
+            <td>{{join $counts.Messages ", "}}</td>
         </tr>
         {{end}}
     </tbody>
@@ -247,13 +249,12 @@ func handleHTMLOutput(prefix string, results map[string]StatusCount, fs afero.Fs
 }
 
 func handleConsoleOutput(results map[string]StatusCount) {
-	fmt.Println("Scenario Name | Status | Error Messages")
+	fmt.Println("Scenario Summary")
+	fmt.Printf("%-20s | %-6s | %-6s | %s\n", "Scenario Name", "Passed", "Failed", "Error Messages")
+	fmt.Println(strings.Repeat("-", 60)) // Adjust the length as needed for better formatting
+
 	for name, count := range results {
-		errors := strings.Join(count.Messages, "; ")
-		status := "Failed"
-		if count.Passed {
-			status = "Passed"
-		}
-		fmt.Printf("%s | %s | %s\n", name, status, errors)
+		errorMessages := strings.Join(count.Messages, "; ")
+		fmt.Printf("%-20s | %-6d | %-6d | %s\n", name, count.Passed, count.Failed, errorMessages)
 	}
 }
