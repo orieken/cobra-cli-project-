@@ -167,15 +167,51 @@ func outputResults(handler OutputHandler, prefix string, results map[string]Stat
 }
 
 const htmlTemplate = `
-<html>
-<head><title>Test Report</title></head>
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <title>Scenario Status Report</title>
+    <style>
+        body { font-family: Arial, sans-serif; margin: 20px; }
+        table { width: 100%; border-collapse: collapse; }
+        th, td { border: 1px solid #ccc; padding: 8px; text-align: left; }
+        th { background-color: #f2f2f2; }
+        details { background-color: #f9f9f9; border-left: 2px solid #e0e0e0; margin: 4px 0; padding: 4px; }
+        summary { font-weight: bold; cursor: pointer; }
+        summary::-webkit-details-marker { display: none; }
+    </style>
+</head>
 <body>
-<h1>Scenarios</h1>
-<ul>
-{{- range $name, $counts := . }}
-    <li>{{$name}} - {{if $counts.Passed}}Passed{{else}}Failed{{end}}: {{join $counts.Messages ", "}}</li>
-{{- end }}
-</ul>
+<h1>Scenario Status Report</h1>
+<p>Scenarios Total: {{len .}}</p>
+<p>Passed: {{countPassed .}}</p>
+<p>Failed: {{countFailed .}}</p>
+<table>
+    <thead>
+        <tr>
+            <th>Scenario Name</th>
+            <th>Status</th>
+            <th>Error Messages</th>
+        </tr>
+    </thead>
+    <tbody>
+        {{range $name, $counts := .}}
+        <tr>
+            <td>{{$name}}</td>
+            <td>{{if $counts.Passed}}Passed{{else}}Failed{{end}}</td>
+            <td>
+                {{range $counts.Messages}}
+                <details>
+                    <summary>Error Details</summary>
+                    <p>{{.}}</p>
+                </details>
+                {{end}}
+            </td>
+        </tr>
+        {{end}}
+    </tbody>
+</table>
 </body>
 </html>
 `
@@ -194,7 +230,7 @@ func handleHTMLOutput(prefix string, results map[string]StatusCount, fs afero.Fs
 		"join": strings.Join, // Providing implementation for the join function used in the template.
 	}
 
-	htmlTemplate := `{{/* your existing template string here */}}`
+	htmlTemplate := htmlTemplate
 	t, err := template.New("report").Funcs(funcMap).Parse(htmlTemplate)
 	if err != nil {
 		return fmt.Errorf("error parsing HTML template: %v", err)
